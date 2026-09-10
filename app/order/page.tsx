@@ -25,6 +25,7 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 export default async function OrderPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const rawService = Array.isArray(sp.service) ? sp.service[0] : sp.service;
+  const autoSubmit = (process.env.ORDER_AUTO_SUBMIT ?? "").trim() === "1";
   const catalog = await getCatalog();
   const initialService = rawService ? getServiceById(catalog.services, Number(rawService)) ?? null : null;
 
@@ -70,6 +71,30 @@ export default async function OrderPage({ searchParams }: { searchParams: Search
       <div className="container-page">
         <div className="grid gap-6 lg:grid-cols-[1.55fr_1fr]">
           <div>
+            {autoSubmit ? (
+              <div className="mb-4 flex items-start gap-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.07] p-4">
+                <Zap className="mt-0.5 h-4.5 w-4.5 shrink-0 text-emerald-500 dark:text-emerald-300" />
+                <p className="text-[12.5px] leading-relaxed text-fg-soft">
+                  <span className="font-bold text-fg">Mode instan aktif.</span> Setelah form dikirim,
+                  pesanan langsung diproses ke sistem dan Anda menerima ID pesanan untuk dipantau.
+                </p>
+              </div>
+            ) : (
+              <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/[0.07] p-4">
+                <ShieldCheck className="mt-0.5 h-4.5 w-4.5 shrink-0 text-amber-500 dark:text-amber-300" />
+                <div className="text-[12.5px] leading-relaxed text-fg-soft">
+                  <p className="font-bold text-fg">Bayar dulu, baru diproses — pesanan Anda aman.</p>
+                  <p className="mt-1">
+                    Setelah menekan <span className="font-semibold">Buat Pesanan</span>, Anda menerima{" "}
+                    <span className="font-semibold">kode referensi</span> beserta total tagihan dan kanal
+                    pembayaran (QRIS / e-wallet / transfer bank). Kirim bukti bayar + kode referensi ke admin
+                    lewat WhatsApp, lalu admin memproses pesanan ke sistem (rata-rata di bawah 15 menit pada
+                    jam kerja).
+                  </p>
+                </div>
+              </div>
+            )}
+
             <OrderForm initialService={initialService} services={[]} />
 
             {initialService ? (

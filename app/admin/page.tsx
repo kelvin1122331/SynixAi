@@ -281,7 +281,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
                     return (
                       <tr key={`${tier.maxCost}-${tier.multiplier}`} className="border-t border-line">
                         <td className="px-3 py-2 text-fg-soft">{label}</td>
-                        <td className="px-3 py-2 text-right font-bold text-fg">{tier.multiplier}×</td>
+                        <td className="px-3 py-2 text-right font-bold text-fg">
+                          {tier.multiplier.toLocaleString("id-ID", { maximumFractionDigits: 2 })}×
+                        </td>
                         <td className="px-3 py-2 text-right font-bold text-emerald-500 dark:text-emerald-300">
                           +{((tier.multiplier - 1) * 100).toFixed(0)}%
                         </td>
@@ -350,12 +352,26 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <MiniStat
-                label="Layanan termahal"
-                value={margin.highest ? `${formatRupiah(margin.highest.price)} → ${formatRupiah(margin.highest.priceRetail)}` : "-"}
+                label="Markup tertinggi (layanan termurah)"
+                value={
+                  margin.highest
+                    ? `${formatRupiah(margin.highest.price)} → ${formatRupiah(margin.highest.priceRetail)} (+${(
+                        ((margin.highest.priceRetail - margin.highest.price) / margin.highest.price) *
+                        100
+                      ).toFixed(0)}%)`
+                    : "-"
+                }
               />
               <MiniStat
-                label="Layanan termurah"
-                value={margin.lowest ? `${formatRupiah(margin.lowest.price)} → ${formatRupiah(margin.lowest.priceRetail)}` : "-"}
+                label="Markup terendah (layanan termahal)"
+                value={
+                  margin.lowest
+                    ? `${formatRupiah(margin.lowest.price)} → ${formatRupiah(margin.lowest.priceRetail)} (+${(
+                        ((margin.lowest.priceRetail - margin.lowest.price) / margin.lowest.price) *
+                        100
+                      ).toFixed(0)}%)`
+                    : "-"
+                }
               />
             </div>
           </div>
