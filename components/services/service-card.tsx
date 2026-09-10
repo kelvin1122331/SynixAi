@@ -102,27 +102,63 @@ export function ServiceCard({ service, className }: { service: Service; classNam
   );
 }
 
-/** Versi ringkas (baris) untuk daftar padat / tabel harga. */
+/** Versi ringkas (baris) untuk tampilan daftar padat. */
 export function ServiceRow({ service }: { service: Service }) {
   return (
-    <div className="flex items-center gap-3 border-b border-line px-3 py-3 transition-colors last:border-0 hover:bg-surface-3/50">
-      <PlatformIcon platform={service.platform} className="h-4 w-4 shrink-0" />
+    <div className="group flex flex-col gap-3 border-b border-line px-4 py-4 transition-colors last:border-0 hover:bg-surface-3/40 lg:flex-row lg:items-center lg:gap-4">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-surface-3">
+        <PlatformIcon platform={service.platform} className="h-5 w-5" />
+      </span>
+
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-semibold text-fg">{service.name}</p>
-        <p className="truncate text-[11.5px] text-muted">{service.categoryRaw}</p>
-      </div>
-      <div className="hidden text-right sm:block">
-        <p className="text-[12px] font-bold text-fg">{formatRupiah(service.priceRetail)}</p>
-        <p className="text-[10.5px] text-muted">
-          min {compactNumber(service.min)} · maks {compactNumber(service.max)}
+        <p className="truncate text-[13.5px] font-bold text-fg" title={service.fullName}>
+          {service.name}
         </p>
+        <p className="truncate text-[11.5px] text-muted">
+          {service.platformLabel} · {service.category}
+          {service.variant ? ` · ${service.variant}` : ""} · #{service.id}
+        </p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {service.badges.slice(0, 3).map((badge) => (
+            <Badge key={badge} tone={badgeTone(badge)} size="sm">
+              {badge}
+            </Badge>
+          ))}
+        </div>
       </div>
-      <Link
-        href={`/order?service=${service.id}`}
-        className="shrink-0 rounded-lg border border-brand-400/40 px-3 py-1.5 text-[12px] font-bold text-brand-500 transition-colors hover:bg-brand-500/10 dark:text-brand-300"
-      >
-        Pesan
-      </Link>
+
+      <div className="grid grid-cols-3 gap-3 lg:w-[330px] lg:shrink-0">
+        <div>
+          <p className="text-[10.5px] font-semibold tracking-wide text-muted uppercase">Harga / 1K</p>
+          <p className="text-[14px] font-extrabold text-emerald-500 dark:text-emerald-300">
+            {formatRupiah(service.priceRetail)}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10.5px] font-semibold tracking-wide text-muted uppercase">Min</p>
+          <p className="text-[12.5px] font-bold text-fg-soft">{compactNumber(service.min)}</p>
+        </div>
+        <div>
+          <p className="text-[10.5px] font-semibold tracking-wide text-muted uppercase">Maks</p>
+          <p className="text-[12.5px] font-bold text-fg-soft">{compactNumber(service.max)}</p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 lg:shrink-0">
+        <Link
+          href={`/order?service=${service.id}`}
+          className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl gradient-brand px-4 text-[13px] font-bold text-white shadow-md shadow-brand-600/25 transition-transform duration-200 hover:scale-[1.02] lg:flex-none"
+        >
+          Pesan
+        </Link>
+        <Link
+          href={`/layanan/${service.id}`}
+          aria-label={`Detail layanan ${service.name}`}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-surface-3 text-fg-soft transition-colors hover:border-brand-400/50 hover:text-fg"
+        >
+          <Info className="h-4 w-4" />
+        </Link>
+      </div>
     </div>
   );
 }

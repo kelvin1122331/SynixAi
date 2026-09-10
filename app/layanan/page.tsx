@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Flame, LayoutGrid, ListFilter, MessageCircle, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { PageHero } from "@/components/site/page-hero";
-import { ServiceCard } from "@/components/services/service-card";
+import { ServiceCard, ServiceRow } from "@/components/services/service-card";
 import { ServiceFilters } from "@/components/services/service-filters";
 import { CatalogNotice } from "@/components/services/catalog-notice";
 import { Pagination } from "@/components/ui/pagination";
 import { EmptyState } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
-import { getCatalog, filterServices } from "@/lib/catalog";
+import { filterServices, getCatalog, getCatalogStats } from "@/lib/catalog";
 import { compactNumber, formatRupiah } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
 
@@ -30,6 +30,7 @@ function first(value: string | string[] | undefined): string | undefined {
 export default async function LayananPage({ searchParams }: { searchParams: SearchParams }) {
   const sp = await searchParams;
   const catalog = await getCatalog();
+  const stats = getCatalogStats(catalog.services);
 
   const page = Number(first(sp.page) ?? 1) || 1;
   const perPage = Number(first(sp.perPage) ?? 24) || 24;
@@ -82,7 +83,7 @@ export default async function LayananPage({ searchParams }: { searchParams: Sear
         }
         description={
           <>
-            {catalog.services.length.toLocaleString("id-ID")} layanan aktif untuk menambah followers, likes,
+            {stats.totalServices.toLocaleString("id-ID")} layanan aktif untuk menambah followers, likes,
             views, komentar, subscriber, hingga live stream viewers. Semua harga di bawah adalah harga per
             1.000 unit dan total biaya dihitung otomatis saat memesan.
           </>
@@ -92,17 +93,17 @@ export default async function LayananPage({ searchParams }: { searchParams: Sear
           <QuickStat
             icon={<LayoutGrid className="h-4 w-4" />}
             label="Total layanan"
-            value={catalog.services.length.toLocaleString("id-ID")}
+            value={stats.totalServices.toLocaleString("id-ID")}
           />
           <QuickStat
             icon={<ShieldCheck className="h-4 w-4" />}
             label="Layanan bergaransi"
-            value={result.facets.platforms.length ? `${catalog.services.filter((s) => s.refill).length}+` : "-"}
+            value={stats.refillCount.toLocaleString("id-ID")}
           />
           <QuickStat
             icon={<Zap className="h-4 w-4" />}
             label="Harga mulai"
-            value={formatRupiah(result.facets.priceRange.min)}
+            value={formatRupiah(stats.priceFrom)}
           />
         </div>
       </PageHero>
@@ -207,9 +208,7 @@ export default async function LayananPage({ searchParams }: { searchParams: Sear
         ) : view === "list" ? (
           <div className="overflow-hidden rounded-2xl border border-line bg-surface-2/45">
             {result.items.map((service) => (
-              <div key={service.id} className="border-b border-line last:border-0">
-                <ServiceCard service={service} className="rounded-none border-0 bg-transparent shadow-none hover:translate-y-0" />
-              </div>
+              <ServiceRow key={service.id} service={service} />
             ))}
           </div>
         ) : (
