@@ -3,6 +3,7 @@ import path from "node:path";
 import { fetchPanelServices, getCredentials } from "./smm";
 import { resolvePlatform, getPlatform, PLATFORM_PRIORITY } from "./platforms";
 import { parseLooseNumber } from "./format";
+import { calculateRetailPrice, getPricingConfig } from "./pricing";
 import type { Catalog, RawPanelService, Service } from "./types";
 
 /* ==========================================================================
@@ -171,15 +172,14 @@ function maxLabel(n: number): string {
   return String(n);
 }
 
-/** Markup & pembulatan harga jual dari env (dipanggil sekali per normalisasi). */
+/**
+ * Harga jual per 1.000 unit dihitung oleh mesin pricing bertingkat
+ * (lihat lib/pricing.ts). Dipanggil sekali per layanan saat normalisasi.
+ */
+const pricingConfig = getPricingConfig();
+
 function retailPrice(base: number): number {
-  const markup = Number(process.env.NEXT_PUBLIC_PRICE_MARKUP ?? 0);
-  const rounding = Number(process.env.NEXT_PUBLIC_PRICE_ROUNDING ?? 0);
-  let value = base * (1 + (Number.isFinite(markup) ? markup : 0) / 100);
-  if (Number.isFinite(rounding) && rounding > 0) {
-    value = Math.ceil(value / rounding) * rounding;
-  }
-  return Math.round(value);
+  return calculateRetailPrice(base, pricingConfig);
 }
 
 export function normalizeService(raw: RawPanelService): Service {
@@ -588,4 +588,40 @@ export function toPublicService(service: Service): Service {
 
 export function toPublicServices(services: Service[]): Service[] {
   return services.map(toPublicService);
+}
+
+/**
+ * Ringkasan margin katalog (khusus halaman internal /admin).
+ * `price` = harga kulakan panel, `priceRetail` = harga jual ke customer.
+ */
+export function getMarginSummary(services: Service[]) {
+  const valid = services.filter((s) => s.price > 0 && s.priceRetail > 0);
+  if (!valid.length) {
+    return {
+      total: 0,
+      averageMarginPercent: 0,
+      averageMultiplier: 0,
+      lowest: null as null | Service,
+      highest: null as null | Service,
+      totalPotentialProfit: 0,
+    };
+  }
+
+  const withMargin = valid.map((service) => ({
+    service,
+    percent: ((service.priceRetail - service.price) / service.price) * 100,
+  }));
+
+  const lowest = withMargin.reduce((min, item) => (item.percent < min.percent ? item : min), withMargin[0]).service;
+  const highest = withMargin.reduce((max, item) => (item.percent > max.percent ? item : max), withMargin[0]).service;
+
+  return {
+    total: valid.length,
+    averageMarginPercent: withMargin.reduce((sum, item) => sum + item.percent, 0) / withMargin.length,
+    averageMultiplier:
+      valid.reduce((sum, service) => sum + service.priceRetail / service.price, 0) / valid.length,
+    lowest,
+    highest,
+    totalPotentialProfit: valid.reduce((sum, service) => sum + (service.priceRetail - service.price), 0),
+  };
 }

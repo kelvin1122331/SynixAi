@@ -18,20 +18,41 @@ status pesanan — semuanya dalam satu situs yang responsif di HP maupun laptop.
 | `/` | Landing: hero + mock UI pesanan, statistik animasi, katalog populer per platform, keunggulan, tabel harga termurah per kategori, 4 langkah order, testimoni, FAQ, metode pembayaran, CTA |
 | `/layanan` | Katalog lengkap: pencarian, filter platform/kategori/harga/garansi/instan, urutan (populer, termurah, termahal, min, maks, A–Z), tampilan grid & daftar, paginasi, 24/48/96 per halaman |
 | `/layanan/[id]` | Detail layanan: spesifikasi lengkap, deskripsi bersih (tanpa boilerplate provider), form pesanan langsung, layanan serupa, JSON-LD Product untuk SEO |
-| `/order` | Form pemesanan: pencarian layanan lintas katalog, validasi min/maks, ringkasan biaya otomatis, QC persetujuan, hasil + tombol konfirmasi WhatsApp |
+| `/order` | Form pemesanan: pencarian layanan lintas katalog, validasi min/maks, ringkasan biaya otomatis, QC persetujuan, **panel pembayaran** (kode referensi, total, kanal QRIS/bank/e-wallet) |
 | `/cek-order` | Cek status pesanan real-time (maks 20 ID sekaligus), progress bar, arti setiap status, opsi refresh otomatis 30 detik |
-| `/riwayat` | Riwayat pesanan perangkat (localStorage), perbarui status, ekspor CSV, hapus |
+| `/riwayat` | Riwayat pesanan perangkat (localStorage), perbarui status (termasuk catatan dari admin), ekspor CSV, hapus |
 | `/api-docs` | Dokumentasi API reseller dengan contoh kode cURL/PHP/Node.js/Python |
 | `/faq`, `/kontak`, `/syarat`, `/privasi`, `/refund`, `/status`, `/page/contoh-target` | Pusat bantuan, kontak + template pesan, dokumen legal, status sistem, panduan input target |
-| `/admin` | **Internal**: diagnosa koneksi panel, sinkron ulang katalog, probe saldo, environmental checklist (dilindungi `ADMIN_TOKEN`) |
+| `/admin` | **Internal**: dashboard margin & laba, **antrean pembayaran** (kirim ke panel / batalkan), sinkron ulang katalog, tabel tier harga, audit margin terendah, probe saldo, checklist go-live (dilindungi `ADMIN_TOKEN`) |
+
+### Alur pemesanan (bayar dulu → order dikirim admin)
+
+Website ini **tidak** mengirim order ke panel secara otomatis, supaya saldo panel tidak terkuras oleh
+pesanan yang belum dibayar. Alurnya:
+
+1. Customer mengisi form di `/order` → server membuat **kode referensi** `SYN-XXXXXX` beserta
+   total tagihan (harga jual bermargin) dan instruksi pembayaran (QRIS / transfer bank / e-wallet).
+2. Customer membayar, lalu mengirim bukti + kode referensi ke admin (tombol WhatsApp sudah otomatis
+   membawa teks pesanan).
+3. Admin membuka `/admin?token=…` → tab **Antrean pembayaran** → tombol **Kirim ke panel**.
+4. Sistem mengirim order ke API panel memakai modal (harga panel), mencatat ID order panel + laba bersih,
+   dan pesanan berubah status menjadi *Terkirim*.
+5. Customer memantau lewat `/cek-order` atau `/riwayat` — catatan admin (`note`) tampil di halaman status.
+
+Menghendaki mode instan (order langsung dikirim ke panel tanpa verifikasi pembayaran)? Setel
+`ORDER_AUTO_SUBMIT=1`. Mode ini hanya cocok bila pembayaran sudah pasti (mis. saldo deposit) karena
+setiap order langsung memotong saldo panel.
+
+---
 
 ### API internal (untuk reseller / integrasi)
 | Method | Endpoint | Fungsi |
 | --- | --- | --- |
 | GET | `/api/services` | Katalog (filter, sort, paginasi, facet) |
 | GET | `/api/services/{id}` | Detail layanan + rekomendasi |
-| POST | `/api/order` | Buat pesanan ke panel |
+| POST | `/api/order` | Buat pesanan: mode manual (buat kode referensi + tagihan) atau instan (`ORDER_AUTO_SUBMIT=1`) |
 | GET | `/api/status?order=ID` / `?orders=1,2,3` | Cek status pesanan |
+| POST | `/api/admin/quotes` | **Admin** (butuh `ADMIN_TOKEN`): `action: list \| submit \| cancel \| sync` pada antrean pembayaran |
 | GET | `/api/health[?probe=1]` | Status sistem & uji saldo panel |
 
 ### UX / Desain
@@ -87,8 +108,16 @@ npm run build && npm start
 | `NEXT_PUBLIC_WA_NUMBER` | – | Nomor WhatsApp admin, format `62…` tanpa `+` |
 | `NEXT_PUBLIC_SUPPORT_EMAIL` | – | E-mail support |
 | `NEXT_PUBLIC_SITE_URL` | – | Domain publik (dipakai sitemap & contoh kode API) |
-| `NEXT_PUBLIC_PRICE_MARKUP` | – | Markup harga jual dalam persen. `0` = sama dengan harga panel |
+| `PRICING_TIERS` | – | Override tier markup: JSON `[[batas, pengali], …]` (lihat bagian 💰 Margin harga) |
+| `PRICING_MIN_PROFIT` | – | Laba minimum per 1.000 unit (default `1000`); harga jual dinaikkan bila laba di bawah ini |
+| `PRICING_ROUND_STEP` | – | Langkah pembulatan harga jual; `0` = otomatis (100 → 500 → 1.000 → 10.000 → 100.000) |
+| `NEXT_PUBLIC_PRICE_MARKUP` | – | Paksa markup tunggal (mis. `80` = ×1,8). `0` = pakai tier bertingkat (default) |
 | `NEXT_PUBLIC_PRICE_ROUNDING` | – | Pembulatan ke atas harga jual (mis. `100` → kelipatan Rp 100) |
+| `ORDER_AUTO_SUBMIT` | – | `1` = order langsung dikirim ke panel (default `0` = bayar dulu, dikirim admin) |
+| `NEXT_PUBLIC_PAYMENT_QRIS_NAME` | – | Nama merchant QRIS yang ditampilkan di panel pembayaran |
+| `NEXT_PUBLIC_PAYMENT_BANK_NAME` / `_NUMBER` / `_HOLDER` | – | Rekening transfer bank |
+| `NEXT_PUBLIC_PAYMENT_EWALLET_LABEL` / `_NUMBER` / `_HOLDER` | – | E-wallet (mis. DANA/OVO/GoPay) |
+| `NEXT_PUBLIC_PAYMENT_VALIDITY_MINUTES` | – | Masa berlaku kode pembayaran (default `120` menit) |
 | `CATALOG_REVALIDATE_SECONDS` | – | Lama cache katalog (default `600` detik) |
 | `CATALOG_FORCE_OFFLINE` | – | `1` = selalu pakai `data/services.json` (tanpa request ke panel) |
 | `ADMIN_TOKEN` | – | Token halaman `/admin`. Kosongkan untuk menonaktifkan proteksi |
@@ -142,19 +171,50 @@ npm run generate:sample   # menulis ulang data contoh (katalog demo)
 
 ---
 
-## 💰 Margin harga
+## 💰 Margin harga (keuntungan Anda)
 
-Harga di katalog adalah harga **per 1.000 unit**. Markup jual dihitung otomatis:
+Harga katalog panel = **harga modal**. Harga yang dilihat customer = harga modal **dinaikkan otomatis**
+oleh `lib/pricing.ts` sehingga Anda selalu untung. Semua harga per **1.000 unit**.
 
+### Tier markup bawaan (makin murah modalnya, makin besar pengalinya)
+
+| Harga modal / 1.000 | Pengali | Contoh modal | Harga jual |
+| --- | --- | --- | --- |
+| ≤ Rp 3.000 | ×2,8 | Rp 1.820 | Rp 5.100 |
+| ≤ Rp 8.000 | ×2,4 | Rp 5.500 | Rp 13.200 |
+| ≤ Rp 20.000 | ×2,0 | Rp 19.215 | Rp 38.500 |
+| ≤ Rp 50.000 | ×1,7 | Rp 30.568 | Rp 52.000 |
+| ≤ Rp 150.000 | ×1,5 | Rp 120.000 | Rp 180.000 |
+| ≤ Rp 500.000 | ×1,4 | Rp 300.000 | Rp 420.000 |
+| > Rp 500.000 | ×1,3 | Rp 900.000 | Rp 1.170.000 |
+
+Dua pengaman tambahan:
+
+- **Laba minimum** `PRICING_MIN_PROFIT` (default Rp 1.000 per 1.000 unit) — harga jual otomatis
+  dinaikkan bila pengali tier menghasilkan laba di bawah ambang ini.
+- **Pembulatan otomatis** agar angka enak dibaca: 100 (di bawah Rp 10rb) → 500 (< Rp 100rb)
+  → 1.000 (< Rp 1jt) → 10.000 (< Rp 10jt) → 100.000 (di atasnya). Bisa dipaksa lewat
+  `PRICING_ROUND_STEP`.
+
+Contoh nyata dari data panel: layanan #6807 (modal Rp 30.568/1.000) dijual **Rp 52.000/1.000**
+→ laba **Rp 21.432/1.000**. Layanan termurah di katalog contoh (modal Rp 1.820) dijual **Rp 5.100**.
+
+### Mengubah strategi harga
+
+```bash
+# A) Biarkan tier bertingkat (default, disarankan) — cukup atur laba minimum
+PRICING_MIN_PROFIT=1500
+
+# B) Markup tunggal untuk semua layanan: modal × (1 + 80/100) = ×1,8
+NEXT_PUBLIC_PRICE_MARKUP=80
+
+# C) Tier kustom: [[batas_maks_harga_modal, pengali], …] — terakhir = penangkap sisa
+PRICING_TIERS=[[5000,3.5],[20000,2.2],[100000,1.6],[Infinity,1.35]]
 ```
-harga_jual = harga_panel × (1 + NEXT_PUBLIC_PRICE_MARKUP / 100)
-```
 
-Contoh: harga panel Rp 30.568 dan `NEXT_PUBLIC_PRICE_MARKUP=20` → harga jual Rp 36.682.
-`NEXT_PUBLIC_PRICE_ROUNDING=100` akan membulatkan ke atas ke kelipatan Rp 100.
-Harga modal panel **tidak** dikirim ke browser (lihat `toPublicServices()` di `lib/catalog.ts`).
-
----
+Harga modal panel **tidak pernah** dikirim ke browser (`toPublicServices()` di `lib/catalog.ts`
+membuang field `price`). Untuk audit margin, buka `/admin?token=…` → metrik laba, tabel tier, dan
+daftar 10 layanan dengan margin terendah.
 
 ## 🌐 Deploy
 
@@ -206,16 +266,19 @@ app/
   api-docs/ faq/ kontak/ status/ admin/  # dokumentasi, bantuan, diagnosa
   syarat/ privasi/ refund/               # halaman legal
   page/contoh-target/                    # panduan target pesanan
-  api/                                   # services, order, status, health
+  api/                                   # services, order, status, health, admin/quotes
   robots.ts sitemap.ts not-found.tsx
 components/
   site/      navbar, footer, logo, page-hero, mobile-nav, WA FAB, legal-layout
   ui/        button, badge, field, toast, misc (counter/accordion/copy/dll), platform-icon, brand-icon
   services/  service-card, service-filters, order-form, order-status-checker, order-history, catalog-notice
+  admin/     quote-actions (tombol kirim/batal/sinkron di dashboard)
   landing/   hero, sections, popular-services, price-table, faq-section
   docs/      api-tabs
 lib/
   smm.ts          klien API panel (POST+GET fallback, timeout, pesan error ramah)
+  pricing.ts      mesin margin: tier markup, laba minimum, pembulatan
+  quotes.ts       antrean pembayaran (kode referensi SYN-, status, catatan admin)
   catalog.ts      normalisasi layanan, cache, filter, agregasi
   platforms.ts    metadata platform (label, warna, ikon)
   format.ts       format Rupiah/angka/tanggal, status pesanan
@@ -238,7 +301,10 @@ data/
 | Nomor WhatsApp / e-mail | `.env.local` (`NEXT_PUBLIC_WA_NUMBER`, `NEXT_PUBLIC_SUPPORT_EMAIL`) |
 | Warna & tema | `app/globals.css` (blok `@theme` dan token `:root` / `.dark`) |
 | Fitur, langkah order, testimoni, FAQ | `lib/content.ts` |
-| Metode pembayaran | `lib/site-config.ts` |
+| Strategi harga / markup | `.env.local` (`PRICING_*`, `NEXT_PUBLIC_PRICE_MARKUP`) + `lib/pricing.ts` |
+| Rekening & kanal pembayaran | `.env.local` (`NEXT_PUBLIC_PAYMENT_*`) + `lib/site-config.ts` |
+| Mode bayar-dulu vs instan | `.env.local` (`ORDER_AUTO_SUBMIT=0` / `1`) |
+| Alur antrean pembayaran | `lib/quotes.ts`, `app/api/admin/quotes/route.ts` |
 | Logo / favicon | `components/site/logo.tsx`, `public/icon.svg` |
 | Gambar sosial (OG) | `public/og.png` |
 
@@ -251,6 +317,9 @@ data/
 | Banner “Mode pratinjau” muncul | Server tidak bisa menjangkau panel (offline/ firewall) atau kredensial belum diisi. Isi `.env.local` lalu buka `/admin` → **Sinkronkan sekarang**. |
 | Order gagal: *“IP … tidak diizinkan”* | Whitelist IP server di dashboard panel (menu API). Cek IP-nya lewat `/admin` → probe. |
 | Order gagal: *“Saldo panel tidak cukup”* | Top-up saldo akun panel Anda. |
+| Status customer tetap “Menunggu Pembayaran” | Normal pada mode default: kirim order dari `/admin` → **Antrean pembayaran** setelah pembayaran masuk. |
+| Tombol **Kirim ke panel** gagal (502) | Server tidak bisa menjangkau API panel atau IP belum di-whitelist; pesan alasannya tercatat otomatis di catatan pesanan customer. |
+| Kode referensi `SYN-…` hilang setelah restart | Antrean pembayaran disimpan di memori (default). Untuk produksi serius, ganti `lib/quotes.ts` dengan database. |
 | Katalog kosong / layanan hilang | Panel sedang maintenance, atau layanan dinonaktifkan di panel. Coba sinkron ulang. |
 | Harga tidak berubah setelah markup diubah | Harga di-cache. Tunggu `CATALOG_REVALIDATE_SECONDS` atau klik sinkron di `/admin`. |
 | Gambar/ikon tidak muncul | Semua aset self-hosted; pastikan `public/` ikut ter-deploy. |

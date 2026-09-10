@@ -19,6 +19,10 @@ interface StatusRow {
   currency?: string | null;
   error?: string;
   code?: string;
+  /** Keterangan tambahan (mis. pesanan menunggu pembayaran). */
+  note?: string;
+  /** Detail tambahan: layanan, target, total. */
+  details?: Array<{ label: string; value: string }>;
 }
 
 const toneClasses: Record<string, string> = {
@@ -186,6 +190,25 @@ export function OrderStatusChecker({ initialOrder }: { initialOrder?: string }) 
                 ) : (
                   <p className="mt-2 text-[12.5px] leading-relaxed text-muted">{row.error}</p>
                 )}
+
+                {row.ok && row.note ? (
+                  <p className="mt-2.5 rounded-xl border border-line bg-surface-2/60 px-3 py-2 text-[12px] leading-relaxed text-muted">
+                    {row.note}
+                  </p>
+                ) : null}
+
+                {row.ok && row.details?.length ? (
+                  <div className="mt-2.5 grid gap-2 sm:grid-cols-3">
+                    {row.details.map((detail) => (
+                      <div key={detail.label} className="rounded-xl border border-line bg-surface-2/50 px-3 py-2">
+                        <p className="text-[10.5px] font-bold tracking-wide text-muted uppercase">{detail.label}</p>
+                        <p className="mt-0.5 truncate text-[12.5px] font-semibold text-fg" title={detail.value}>
+                          {detail.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             );
           })}

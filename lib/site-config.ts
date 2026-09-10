@@ -69,3 +69,20 @@ export const footerLinks = {
     { href: "/status", label: "Status Sistem" },
   ],
 } as const;
+
+/** Info pembayaran yang ditampilkan ke customer saat menyelesaikan pembayaran. */
+export const paymentConfig = {
+  qrisMerchant: process.env.NEXT_PUBLIC_PAYMENT_QRIS_NAME || siteConfig.name,
+  bank: {
+    name: process.env.NEXT_PUBLIC_PAYMENT_BANK || "BCA",
+    account: process.env.NEXT_PUBLIC_PAYMENT_BANK_ACCOUNT || "1234567890",
+    holder: process.env.NEXT_PUBLIC_PAYMENT_BANK_HOLDER || siteConfig.name,
+  },
+  ewallet: {
+    label: process.env.NEXT_PUBLIC_PAYMENT_EWALLET_LABEL || "DANA / OVO / GoPay / ShopeePay",
+    number: process.env.NEXT_PUBLIC_PAYMENT_EWALLET_NUMBER || siteConfig.whatsapp,
+    holder: process.env.NEXT_PUBLIC_PAYMENT_EWALLET_HOLDER || siteConfig.name,
+  },
+  /** Berapa lama penawaran (quote) berlaku, dalam menit. */
+  quoteValidityMinutes: Number(process.env.PAYMENT_QUOTE_MINUTES ?? 120),
+} as const;

@@ -11,6 +11,7 @@ import { Badge, badgeTone } from "@/components/ui/badge";
 import { Field, Input, Textarea } from "@/components/ui/field";
 import { PlatformIcon } from "@/components/ui/platform-icon";
 import { useToast } from "@/components/ui/toast";
+import { CopyButton } from "@/components/ui/misc";
 import { compactNumber, formatRupiah } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
 import { cn } from "@/lib/cn";
@@ -40,7 +41,7 @@ export function OrderForm({ services = [], initialService, lockedService, classN
   const [comments, setComments] = useState("");
   const [agree, setAgree] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; orderId?: string; message: string; code?: string } | null>(null);
+  const [result, setResult] = useState<FormResult | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
   /* Tutup dropdown saat klik di luar */
@@ -129,11 +130,28 @@ export function OrderForm({ services = [], initialService, lockedService, classN
           comments: comments.trim() || undefined,
         }),
       });
-      const data = (await res.json()) as { ok: boolean; orderId?: string; error?: string; code?: string };
+      const data = (await res.json()) as {
+        ok: boolean;
+        mode?: "auto" | "manual";
+        orderId?: string;
+        reference?: string;
+        needsPayment?: boolean;
+        total?: number;
+        expiresAt?: string;
+        payment?: PaymentInfo;
+        catalogSource?: string;
+        error?: string;
+        code?: string;
+      };
 
       if (data.ok && data.orderId) {
-        setResult({ ok: true, orderId: data.orderId, message: "Pesanan berhasil dibuat." });
-        toast({ title: "Pesanan berhasil dibuat 🎉", description: `ID Pesanan: ${data.orderId}`, tone: "success" });
+        // Mode instan: pesanan langsung diteruskan ke provider
+        setResult({ kind: "auto", orderId: data.orderId, total: data.total ?? total });
+        toast({
+          title: "Pesanan berhasil dibuat 🎉",
+          description: `ID Pesanan: ${data.orderId}`,
+          tone: "success",
+        });
         saveToHistory({
           id: data.orderId,
           serviceId: selected.id,
@@ -141,28 +159,73 @@ export function OrderForm({ services = [], initialService, lockedService, classN
           platform: selected.platform,
           target: target.trim(),
           quantity,
-          total,
+          total: data.total ?? total,
           createdAt: new Date().toISOString(),
           status: "Pending",
         });
+      } else if (data.ok && data.needsPayment && data.reference) {
+        // Mode aman: pesanan menunggu pembayaran (kode referensi)
+        setResult({
+          kind: "manual",
+          reference: data.reference,
+          total: data.total ?? total,
+          expiresAt: data.expiresAt,
+          payment: data.payment,
+          catalogSource: data.catalogSource,
+        });
+        toast({
+          title: "Pesanan dibuat — menunggu pembayaran",
+          description: `Kode referensi: ${data.reference}`,
+          tone: "warning",
+        });
+        saveToHistory({
+          id: data.reference,
+          serviceId: selected.id,
+          serviceName: selected.name,
+          platform: selected.platform,
+          target: target.trim(),
+          quantity,
+          total: data.total ?? total,
+          createdAt: new Date().toISOString(),
+          status: "Menunggu Pembayaran",
+        });
       } else {
         setResult({
-          ok: false,
+          kind: "error",
           code: data.code,
           message: data.error ?? "Pesanan gagal dibuat. Silakan coba lagi atau hubungi admin.",
         });
         toast({ title: "Pesanan gagal", description: data.error ?? "Terjadi kesalahan.", tone: "error" });
       }
     } catch (error) {
-      setResult({ ok: false, message: `Tidak dapat menghubungi server: ${(error as Error).message}` });
+      setResult({ kind: "error", message: `Tidak dapat menghubungi server: ${(error as Error).message}` });
       toast({ title: "Koneksi gagal", description: "Periksa koneksi internet Anda.", tone: "error" });
     } finally {
       setSubmitting(false);
     }
   }
 
-  /* ------------------------------------------------------ Tampilan sukses */
-  if (result?.ok && selected) {
+  /* ------------------------------- Tampilan: menunggu pembayaran (aman) */
+  if (result?.kind === "manual" && selected) {
+    return (
+      <PaymentPanel
+        result={result}
+        service={selected}
+        target={target}
+        quantity={quantity}
+        className={className}
+        onReset={() => {
+          setResult(null);
+          setTarget("");
+          setComments("");
+          setAgree(false);
+        }}
+      />
+    );
+  }
+
+  /* ----------------------------- Tampilan: pesanan langsung dikirim (auto) */
+  if (result?.kind === "auto" && selected) {
     return (
       <div className={cn("rounded-3xl border border-emerald-500/30 bg-emerald-500/[0.07] p-5 sm:p-7", className)}>
         <div className="flex items-start gap-4">
@@ -178,11 +241,11 @@ export function OrderForm({ services = [], initialService, lockedService, classN
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <InfoRow label="ID Pesanan" value={result.orderId ?? "-"} highlight />
+          <InfoRow label="ID Pesanan" value={result.orderId} highlight />
           <InfoRow label="Layanan" value={selected.name} />
           <InfoRow label="Target" value={target} />
           <InfoRow label="Jumlah" value={`${quantity.toLocaleString("id-ID")} unit`} />
-          <InfoRow label="Total" value={formatRupiah(total)} />
+          <InfoRow label="Total" value={formatRupiah(result.total)} />
           <InfoRow label="Estimasi proses" value={selected.instant ? "1–5 menit (instan)" : "10–60 menit"} />
         </div>
 
@@ -550,7 +613,7 @@ export function OrderForm({ services = [], initialService, lockedService, classN
         </p>
       ) : null}
 
-      {result && !result.ok ? (
+      {result?.kind === "error" ? (
         <div className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/[0.08] p-4">
           <div className="flex items-start gap-2.5">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
@@ -663,4 +726,234 @@ export function readHistory(): HistoryItem[] {
   } catch {
     return [];
   }
+}
+
+/* ==========================================================================
+ *  Tipe hasil form & panel pembayaran
+ * ========================================================================== */
+
+export interface PaymentInfo {
+  qrisName?: string;
+  bank?: { name: string; account: string; holder: string };
+  ewallet?: { label: string; number: string; holder: string };
+}
+
+type FormResult =
+  | { kind: "auto"; orderId: string; total: number }
+  | {
+      kind: "manual";
+      reference: string;
+      total: number;
+      expiresAt?: string;
+      payment?: PaymentInfo;
+      catalogSource?: string;
+    }
+  | { kind: "error"; message: string; code?: string };
+
+/**
+ * Panel instruksi pembayaran.
+ * Ditampilkan setelah customer mengirim pesanan pada mode aman
+ * (ORDER_AUTO_SUBMIT=0) — pesanan baru dikirim ke provider setelah
+ * pembayaran dikonfirmasi admin.
+ */
+function PaymentPanel({
+  result,
+  service,
+  target,
+  quantity,
+  className,
+  onReset,
+}: {
+  result: Extract<FormResult, { kind: "manual" }>;
+  service: Service;
+  target: string;
+  quantity: number;
+  className?: string;
+  onReset: () => void;
+}) {
+  const bank = result.payment?.bank;
+  const ewallet = result.payment?.ewallet;
+  const waMessage = [
+    `Halo admin, saya sudah melakukan pembayaran.`,
+    ``,
+    `Kode Referensi : ${result.reference}`,
+    `Layanan        : ${service.name} (#${service.id})`,
+    `Target         : ${target}`,
+    `Jumlah         : ${quantity.toLocaleString("id-ID")} unit`,
+    `Total Bayar    : ${formatRupiah(result.total)}`,
+    ``,
+    `Mohon segera diproses ya. Bukti transfer saya lampirkan di chat ini.`,
+  ].join("\n");
+
+  return (
+    <div className={cn("rounded-3xl border border-amber-500/35 bg-amber-500/[0.06] p-5 sm:p-7", className)}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-amber-500/15 text-[20px] text-amber-500 dark:text-amber-300">
+            ⏳
+          </span>
+          <div>
+            <h2 className="text-[20px] font-extrabold text-fg">Selesaikan pembayaran</h2>
+            <p className="mt-1 max-w-md text-[13.5px] leading-relaxed text-muted">
+              Pesanan Anda sudah tercatat. Setelah pembayaran dikonfirmasi, pesanan
+              otomatis dikirim ke provider dan bisa dipantau lewat kode referensi di bawah.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-line bg-surface-2/70 px-4 py-3">
+          <p className="text-[10.5px] font-bold tracking-wide text-muted uppercase">Kode Referensi</p>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="font-mono text-[17px] font-extrabold text-amber-600 dark:text-amber-300">
+              {result.reference}
+            </span>
+            <CopyButton value={result.reference} label="Salin" />
+          </div>
+        </div>
+      </div>
+
+      {/* Total */}
+      <div className="mt-6 grid gap-3 sm:grid-cols-[1.2fr_1fr]">
+        <div className="rounded-2xl border border-line bg-surface-3/50 p-4">
+          <p className="text-[11px] font-bold tracking-wide text-muted uppercase">Total yang harus dibayar</p>
+          <p className="mt-1 text-[28px] leading-none font-extrabold text-fg">{formatRupiah(result.total)}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <CopyButton value={String(result.total)} label="Salin nominal" />
+            {result.expiresAt ? (
+              <span className="text-[11.5px] text-muted">
+                Berlaku sampai {new Date(result.expiresAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="space-y-2 rounded-2xl border border-line bg-surface-3/50 p-4 text-[12.5px]">
+          <DetailRow label="Layanan" value={service.name} />
+          <DetailRow label="Target" value={target} />
+          <DetailRow label="Jumlah" value={`${quantity.toLocaleString("id-ID")} unit`} />
+          <DetailRow label="Harga / 1.000" value={formatRupiah(service.priceRetail)} />
+        </div>
+      </div>
+
+      {/* Kanal pembayaran */}
+      <div className="mt-5">
+        <p className="text-[12px] font-bold tracking-wide text-muted uppercase">Pilih kanal pembayaran</p>
+        <div className="mt-2.5 grid gap-3 sm:grid-cols-3">
+          <PayCard
+            title="QRIS (semua e-wallet & m-banking)"
+            lines={[`Merchant: ${result.payment?.qrisName ?? "Admin"}`]}
+            copyValue={null}
+            note="Scan QRIS yang dikirim admin via WhatsApp"
+          />
+          {bank ? (
+            <PayCard
+              title={`Transfer Bank ${bank.name}`}
+              lines={[`No. Rek: ${bank.account}`, `a/n ${bank.holder}`]}
+              copyValue={bank.account}
+            />
+          ) : null}
+          {ewallet ? (
+            <PayCard
+              title={ewallet.label}
+              lines={[`No: ${ewallet.number}`, `a/n ${ewallet.holder}`]}
+              copyValue={ewallet.number}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      {result.catalogSource && result.catalogSource !== "panel" ? (
+        <div className="mt-5 flex items-start gap-2.5 rounded-2xl border border-rose-500/30 bg-rose-500/[0.08] p-3.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            <span className="font-bold text-fg">Mode pratinjau:</span> server ini belum terhubung ke panel, sehingga
+            harga di atas berasal dari data cadangan. Konfirmasi dulu harga final ke admin sebelum melakukan
+            pembayaran.
+          </p>
+        </div>
+      ) : null}
+
+      {/* Langkah selanjutnya */}
+      <div className="mt-5 rounded-2xl border border-line bg-surface-2/60 p-4">
+        <p className="text-[12.5px] font-bold text-fg">Setelah membayar</p>
+        <ol className="mt-2.5 space-y-2">
+          {[
+            `Kirim bukti transfer ke admin dengan menyebutkan kode referensi ${result.reference}.`,
+            "Admin memverifikasi pembayaran (rata-rata < 5 menit pada jam sibuk).",
+            "Pesanan otomatis diteruskan ke provider dan status dapat Anda pantau kapan saja.",
+          ].map((step, index) => (
+            <li key={step} className="flex gap-2.5 text-[12.5px] leading-snug text-muted">
+              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full gradient-brand text-[10.5px] font-extrabold text-white">
+                {index + 1}
+              </span>
+              {step}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Button href={siteConfig.whatsappLink(waMessage)} variant="whatsapp" size="md">
+          <MessageCircle className="h-4 w-4" /> Kirim bukti & konfirmasi
+        </Button>
+        <Button href={`/cek-order?order=${result.reference}`} size="md">
+          Pantau pesanan <ArrowRight className="h-4 w-4" />
+        </Button>
+        <Button variant="secondary" size="md" onClick={onReset}>
+          Buat pesanan lain
+        </Button>
+      </div>
+
+      <p className="mt-4 flex items-start gap-2 text-[12px] text-muted">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand-400" />
+        Pesanan tidak akan diproses sebelum pembayaran terkonfirmasi. Riwayat pesanan juga tersimpan di halaman{" "}
+        <Link href="/riwayat" className="font-semibold text-brand-400 hover:underline">
+          Riwayat Pesanan
+        </Link>{" "}
+        pada perangkat ini.
+      </p>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <span className="shrink-0 text-muted">{label}</span>
+      <span className="truncate text-right font-semibold text-fg" title={value}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function PayCard({
+  title,
+  lines,
+  copyValue,
+  note,
+}: {
+  title: string;
+  lines: string[];
+  copyValue: string | null;
+  note?: string;
+}) {
+  return (
+    <div className="flex flex-col rounded-2xl border border-line bg-surface-2/60 p-3.5">
+      <p className="text-[12.5px] font-bold text-fg">{title}</p>
+      <div className="mt-1.5 space-y-0.5">
+        {lines.map((line) => (
+          <p key={line} className="font-mono text-[12px] text-fg-soft">
+            {line}
+          </p>
+        ))}
+      </div>
+      {note ? <p className="mt-1.5 text-[11px] leading-snug text-muted">{note}</p> : null}
+      {copyValue ? (
+        <div className="mt-2.5">
+          <CopyButton value={copyValue} label="Salin nomor" />
+        </div>
+      ) : null}
+    </div>
+  );
 }
