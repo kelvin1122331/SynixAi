@@ -18,7 +18,7 @@ status pesanan — semuanya dalam satu situs yang responsif di HP maupun laptop.
 | `/` | Landing: hero + mock UI pesanan, statistik animasi, katalog populer per platform, keunggulan, tabel harga termurah per kategori, 4 langkah order, testimoni, FAQ, metode pembayaran, CTA |
 | `/layanan` | Katalog lengkap: pencarian, filter platform/kategori/harga/garansi/instan, urutan (populer, termurah, termahal, min, maks, A–Z), tampilan grid & daftar, paginasi, 24/48/96 per halaman |
 | `/layanan/[id]` | Detail layanan: spesifikasi lengkap, deskripsi bersih (tanpa boilerplate provider), form pesanan langsung, layanan serupa, JSON-LD Product untuk SEO |
-| `/order` | Form pemesanan: pencarian layanan lintas katalog, validasi min/maks, ringkasan biaya otomatis, QC persetujuan, **panel pembayaran** (kode referensi, total, kanal QRIS/bank/e-wallet) |
+| `/order` | Form pemesanan: pencarian layanan lintas katalog, validasi min/maks, ringkasan biaya otomatis, QC persetujuan, **panel pembayaran** (payment gateway 1 klik ATAU kanal manual QRIS/bank/e-wallet) |
 | `/cek-order` | Cek status pesanan real-time (maks 20 ID sekaligus), progress bar, arti setiap status, opsi refresh otomatis 30 detik |
 | `/riwayat` | Riwayat pesanan perangkat (localStorage), perbarui status (termasuk catatan dari admin), ekspor CSV, hapus |
 | `/api-docs` | Dokumentasi API reseller dengan contoh kode cURL/PHP/Node.js/Python |
@@ -43,6 +43,78 @@ Menghendaki mode instan (order langsung dikirim ke panel tanpa verifikasi pembay
 `ORDER_AUTO_SUBMIT=1`. Mode ini hanya cocok bila pembayaran sudah pasti (mis. saldo deposit) karena
 setiap order langsung memotong saldo panel.
 
+Ingin pembayaran **otomatis** (customer bayar QRIS/VA/e-wallet, pesanan langsung diproses tanpa admin)?
+Aktifkan payment gateway — lihat bagian **Pembayaran otomatis (payment gateway)** di bawah.
+
+---
+
+### Pembayaran otomatis (payment gateway)
+
+Selain alur manual (QRIS/transfer/e-wallet + konfirmasi admin), website ini bisa memakai
+**payment gateway**: customer bayar QRIS/VA/e-wallet di halaman pembayaran provider, dan begitu
+provider mengirim webhook *PAID*, sistem **otomatis** mengirim pesanan ke panel SMM — tanpa admin.
+
+```
+Customer klik "Bayar sekarang"
+        │
+        ▼
+Gateway (Tripay/Midtrans/DOKU/Duitku/Xendit/iPaymu)
+        │  webhook POST /api/payment/webhook?provider=xxx  (signature diverifikasi)
+        ▼
+Quote → status "dibayar"  →  otomatis kirim ke panel (ORDER_AUTO_SUBMIT_PAID=1)
+        │                              │
+        │                              └─ gagal? status tetap "dibayar" + alasan dicatat,
+        │                                 admin klik "Kirim ke panel" untuk coba lagi
+        ▼
+Status customer: "Pembayaran diterima" → "Sedang Diproses" (auto-refresh tiap 5 detik di /order)
+```
+
+**Provider yang sudah didukung**: `manual` (tanpa gateway), `mock` (simulasi lokal untuk uji alur),
+`tripay`, `midtrans`, `doku`, `duitku`, `xendit`, `ipaymu`.
+
+Konfigurasi di `.env.local` (contoh Tripay):
+
+```bash
+PAYMENT_PROVIDER=tripay
+PAYMENT_MODE=sandbox              # ganti ke production saat go-live
+PAYMENT_API_KEY=xxxx              # Tripay: API Key
+PAYMENT_PRIVATE_KEY=xxxx          # Tripay: Private Key (untuk signature)
+PAYMENT_MERCHANT_CODE=T12345      # Tripay: Merchant Code
+PAYMENT_METHODS=QRIS              # QRIS | BRIVA | OVO | DANA | SHOPEEPAY | ...
+PAYMENT_FEE_PERCENT=0.7           # biaya gateway, ditanggung customer (default)
+PAYMENT_FEE_BEARER=customer       # customer = ditambahkan ke total; merchant = Anda tanggung
+PAYMENT_WEBHOOK_TOKEN=rahasia     # wajib untuk Xendit & mode mock
+ORDER_AUTO_SUBMIT_PAID=1          # kirim ke panel otomatis setelah lunas
+PUBLIC_BASE_URL=https://domain-anda.com   # untuk URL webhook & return URL
+```
+
+**URL webhook** yang harus didaftarkan di dashboard provider (juga tampil di `/admin`):
+
+```
+https://domain-anda.com/api/payment/webhook?provider=tripay
+```
+
+Cara memetakan kredensial per provider:
+
+| Provider | `PAYMENT_API_KEY` | `PAYMENT_PRIVATE_KEY` | `PAYMENT_MERCHANT_CODE` | Verifikasi webhook |
+| --- | --- | --- | --- | --- |
+| Tripay | API Key | Private Key | Merchant Code | HMAC-SHA256 header `X-Callback-Signature` |
+| Midtrans | Server Key | – | – | SHA-512 `signature_key` |
+| DOKU (Jokul) | – | Secret Key | Client-Id | HMAC-SHA256 + digest SHA-256 |
+| Duitku | API Key | – | Merchant Code | MD5 `merchantCode+amount+merchantOrderId+apiKey` |
+| Xendit | Secret Key | – | – | header `x-callback-token` (= `PAYMENT_WEBHOOK_TOKEN`) |
+| iPaymu | API Key | – | VA | SHA-256 berjenjang + token |
+
+**Menguji tanpa akun gateway**: set `PAYMENT_PROVIDER=mock` → tombol "Bayar sekarang" akan
+menandai tagihan lunas (simulasi) sehingga alur webhook → auto-kirim ke panel bisa diuji utuh.
+Di dashboard admin juga tersedia aksi API `{"action":"simulate","reference":"SYN-XXXXXX"}`.
+
+> Catatan penting: (1) setiap provider kadang mengubah detail signature/field — uji dulu di
+> **sandbox** provider masing-masing sebelum `PAYMENT_MODE=production`; (2) pembayaran yang masuk
+> sebelum IP server di-whitelist panel tetap tercatat sebagai "Pembayaran diterima" dan bisa
+> dikirim manual dari `/admin`; (3) nominal tagihan customer sudah termasuk biaya gateway bila
+> `PAYMENT_FEE_BEARER=customer`, jadi laba Anda tidak berkurang.
+
 ---
 
 ### API internal (untuk reseller / integrasi)
@@ -52,7 +124,8 @@ setiap order langsung memotong saldo panel.
 | GET | `/api/services/{id}` | Detail layanan + rekomendasi |
 | POST | `/api/order` | Buat pesanan: mode manual (buat kode referensi + tagihan) atau instan (`ORDER_AUTO_SUBMIT=1`) |
 | GET | `/api/status?order=ID` / `?orders=1,2,3` | Cek status pesanan |
-| POST | `/api/admin/quotes` | **Admin** (butuh `ADMIN_TOKEN`): `action: list \| submit \| cancel \| sync` pada antrean pembayaran |
+| POST | `/api/payment/webhook?provider=xxx` | **Webhook gateway**: verifikasi signature → tandai lunas → kirim ke panel otomatis (GET hanya untuk simulasi `mock`) |
+| POST | `/api/admin/quotes` | **Admin** (butuh `ADMIN_TOKEN`): `action: list \| submit \| cancel \| sync \| simulate` pada antrean pembayaran |
 | GET | `/api/health[?probe=1]` | Status sistem & uji saldo panel |
 
 ### UX / Desain
@@ -113,7 +186,16 @@ npm run build && npm start
 | `PRICING_ROUND_STEP` | – | Langkah pembulatan harga jual; `0` = otomatis (100 → 500 → 1.000 → 10.000 → 100.000) |
 | `NEXT_PUBLIC_PRICE_MARKUP` | – | Paksa markup tunggal (mis. `80` = ×1,8). `0` = pakai tier bertingkat (default) |
 | `NEXT_PUBLIC_PRICE_ROUNDING` | – | Pembulatan ke atas harga jual (mis. `100` → kelipatan Rp 100) |
-| `ORDER_AUTO_SUBMIT` | – | `1` = order langsung dikirim ke panel (default `0` = bayar dulu, dikirim admin) |
+| `ORDER_AUTO_SUBMIT` | – | `1` = order langsung dikirim ke panel **tanpa pembayaran** (default `0` = aman) |
+| `PAYMENT_PROVIDER` | – | `manual` (default) \| `mock` \| `tripay` \| `midtrans` \| `doku` \| `duitku` \| `xendit` \| `ipaymu` |
+| `PAYMENT_MODE` | – | `sandbox` (default) atau `production` |
+| `PAYMENT_API_KEY` / `PAYMENT_PRIVATE_KEY` / `PAYMENT_MERCHANT_CODE` | – | Kredensial gateway (arti per provider lihat tabel di bagian pembayaran otomatis) |
+| `PAYMENT_METHODS` | – | Kanal pembayaran (mis. `QRIS` atau `QRIS,BRIVA,OVO`) |
+| `PAYMENT_FEE_PERCENT` / `PAYMENT_FEE_FLAT` / `PAYMENT_FEE_BEARER` | – | Biaya gateway; `customer` (default) = ditambahkan ke tagihan |
+| `PAYMENT_WEBHOOK_TOKEN` | – | Token verifikasi webhook (wajib Xendit & `mock`) |
+| `PAYMENT_EXPIRES_MINUTES` | – | Masa berlaku tagihan gateway (default `60`) |
+| `ORDER_AUTO_SUBMIT_PAID` | – | `1` (default) = kirim ke panel otomatis setelah pembayaran lunas |
+| `PUBLIC_BASE_URL` | – | URL publik untuk webhook & return URL; kosongkan = otomatis dari host request |
 | `NEXT_PUBLIC_PAYMENT_QRIS_NAME` | – | Nama merchant QRIS yang ditampilkan di panel pembayaran |
 | `NEXT_PUBLIC_PAYMENT_BANK_NAME` / `_NUMBER` / `_HOLDER` | – | Rekening transfer bank |
 | `NEXT_PUBLIC_PAYMENT_EWALLET_LABEL` / `_NUMBER` / `_HOLDER` | – | E-wallet (mis. DANA/OVO/GoPay) |
@@ -266,7 +348,7 @@ app/
   api-docs/ faq/ kontak/ status/ admin/  # dokumentasi, bantuan, diagnosa
   syarat/ privasi/ refund/               # halaman legal
   page/contoh-target/                    # panduan target pesanan
-  api/                                   # services, order, status, health, admin/quotes
+  api/                                   # services, order, status, health, payment/webhook, admin/quotes
   robots.ts sitemap.ts not-found.tsx
 components/
   site/      navbar, footer, logo, page-hero, mobile-nav, WA FAB, legal-layout
@@ -278,6 +360,9 @@ components/
 lib/
   smm.ts          klien API panel (POST+GET fallback, timeout, pesan error ramah)
   pricing.ts      mesin margin: tier markup, laba minimum, pembulatan
+  payment-gateway.ts   adapter provider (tripay/midtrans/doku/duitku/xendit/ipaymu/mock) + signature
+  payment-settlement.ts penyelesaian pembayaran: webhook → lunas → kirim ke panel
+  quote-fulfillment.ts  kirim pesanan (quote) ke panel, dipakai admin & gateway
   quotes.ts       antrean pembayaran (kode referensi SYN-, status, catatan admin)
   catalog.ts      normalisasi layanan, cache, filter, agregasi
   platforms.ts    metadata platform (label, warna, ikon)
@@ -304,6 +389,7 @@ data/
 | Strategi harga / markup | `.env.local` (`PRICING_*`, `NEXT_PUBLIC_PRICE_MARKUP`) + `lib/pricing.ts` |
 | Rekening & kanal pembayaran | `.env.local` (`NEXT_PUBLIC_PAYMENT_*`) + `lib/site-config.ts` |
 | Mode bayar-dulu vs instan | `.env.local` (`ORDER_AUTO_SUBMIT=0` / `1`) |
+| Mengaktifkan payment gateway | `.env.local` (`PAYMENT_PROVIDER`, `PAYMENT_*`) + `lib/payment-gateway.ts` |
 | Alur antrean pembayaran | `lib/quotes.ts`, `app/api/admin/quotes/route.ts` |
 | Logo / favicon | `components/site/logo.tsx`, `public/icon.svg` |
 | Gambar sosial (OG) | `public/og.png` |
@@ -319,6 +405,9 @@ data/
 | Order gagal: *“Saldo panel tidak cukup”* | Top-up saldo akun panel Anda. |
 | Status customer tetap “Menunggu Pembayaran” | Normal pada mode default: kirim order dari `/admin` → **Antrean pembayaran** setelah pembayaran masuk. |
 | Tombol **Kirim ke panel** gagal (502) | Server tidak bisa menjangkau API panel atau IP belum di-whitelist; pesan alasannya tercatat otomatis di catatan pesanan customer. |
+| Customer bilang sudah bayar tapi status belum berubah | Cek webhook masuk: buka `/admin` → kartu **URL webhook gateway** harus terdaftar di dashboard provider. Bila status "Pembayaran diterima" tetapi belum masuk panel, klik **Kirim ke panel**. |
+| Webhook ditolak (401) | Signature/token tidak cocok. Pastikan `PAYMENT_API_KEY`/`PAYMENT_PRIVATE_KEY` (dan `PAYMENT_WEBHOOK_TOKEN` untuk Xendit) sama dengan yang ada di dashboard provider. |
+| Pesan "Pembayaran otomatis sedang tidak tersedia" | Provider tidak bisa dihubungi atau kredensial salah — sistem otomatis beralih ke instruksi pembayaran manual agar pesanan tidak hilang. |
 | Kode referensi `SYN-…` hilang setelah restart | Antrean pembayaran disimpan di memori (default). Untuk produksi serius, ganti `lib/quotes.ts` dengan database. |
 | Katalog kosong / layanan hilang | Panel sedang maintenance, atau layanan dinonaktifkan di panel. Coba sinkron ulang. |
 | Harga tidak berubah setelah markup diubah | Harga di-cache. Tunggu `CATALOG_REVALIDATE_SECONDS` atau klik sinkron di `/admin`. |

@@ -10,6 +10,7 @@ import { getCatalog, getServiceById, getTopByPlatform, toPublicServices } from "
 import { compactNumber, formatRupiah } from "@/lib/format";
 import { siteConfig } from "@/lib/site-config";
 import { targetExamples } from "@/lib/content";
+import { getGatewayConfig } from "@/lib/payment-gateway";
 
 export const metadata: Metadata = {
   title: "Pesan Layanan SMM — Followers, Likes, Views Otomatis",
@@ -26,6 +27,8 @@ export default async function OrderPage({ searchParams }: { searchParams: Search
   const sp = await searchParams;
   const rawService = Array.isArray(sp.service) ? sp.service[0] : sp.service;
   const autoSubmit = (process.env.ORDER_AUTO_SUBMIT ?? "").trim() === "1";
+  const gateway = getGatewayConfig();
+  const gatewayReady = gateway.enabled && gateway.ready;
   const catalog = await getCatalog();
   const initialService = rawService ? getServiceById(catalog.services, Number(rawService)) ?? null : null;
 
@@ -78,6 +81,19 @@ export default async function OrderPage({ searchParams }: { searchParams: Search
                   <span className="font-bold text-fg">Mode instan aktif.</span> Setelah form dikirim,
                   pesanan langsung diproses ke sistem dan Anda menerima ID pesanan untuk dipantau.
                 </p>
+              </div>
+            ) : gatewayReady ? (
+              <div className="mb-4 flex items-start gap-3 rounded-2xl border border-brand-500/30 bg-brand-500/[0.07] p-4">
+                <CreditCard className="mt-0.5 h-4.5 w-4.5 shrink-0 text-brand-500 dark:text-brand-300" />
+                <div className="text-[12.5px] leading-relaxed text-fg-soft">
+                  <p className="font-bold text-fg">Bayar sekali klik, pesanan langsung diproses.</p>
+                  <p className="mt-1">
+                    Setelah menekan <span className="font-semibold">Buat Pesanan</span>, Anda akan diarahkan
+                    ke halaman pembayaran <span className="font-semibold">QRIS / VA / e-wallet</span>. Sistem
+                    memverifikasi pembayaran secara otomatis, lalu pesanan langsung diteruskan ke provider —
+                    tanpa perlu kirim bukti transfer.
+                  </p>
+                </div>
               </div>
             ) : (
               <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/[0.07] p-4">

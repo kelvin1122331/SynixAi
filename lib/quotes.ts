@@ -17,7 +17,26 @@ import { randomBytes } from "node:crypto";
  * ============================================================================
  */
 
-export type QuoteStatus = "menunggu_pembayaran" | "dibatalkan" | "terkirim";
+export type QuoteStatus = "menunggu_pembayaran" | "dibayar" | "dibatalkan" | "terkirim";
+
+/** Detail transaksi payment gateway (bila PAYMENT_PROVIDER diaktifkan). */
+export interface QuotePayment {
+  provider: string;
+  providerRef: string;
+  channel: string;
+  /** Nominal yang ditagihkan ke customer (termasuk biaya gateway bila ditanggung customer). */
+  amount: number;
+  /** Biaya gateway. */
+  fee: number;
+  /** Harga jual dasar sebelum biaya gateway. */
+  baseAmount: number;
+  payUrl?: string;
+  qrString?: string;
+  payCode?: string;
+  expiresAt?: string;
+  simulated?: boolean;
+  instructions?: string[];
+}
 
 export interface Quote {
   reference: string;
@@ -38,6 +57,8 @@ export interface Quote {
   paidAt?: string;
   panelOrderId?: string;
   note?: string;
+  /** Info pembayaran otomatis (gateway) — kosong bila pembayaran manual. */
+  payment?: QuotePayment;
 }
 
 const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 hari
@@ -110,6 +131,9 @@ export interface QueueSummary {
   pendingCount: number;
   pendingValue: number;
   pendingProfit: number;
+  /** Sudah dibayar (terverifikasi gateway) tetapi belum sampai ke panel. */
+  paidCount: number;
+  paidProfit: number;
   sentCount: number;
   sentProfit: number;
 }
@@ -117,11 +141,14 @@ export interface QueueSummary {
 export function summarizeQueue(): QueueSummary {
   const all = listQuotes();
   const pending = all.filter((q) => q.status === "menunggu_pembayaran");
+  const paid = all.filter((q) => q.status === "dibayar");
   const sent = all.filter((q) => q.status === "terkirim");
   return {
     pendingCount: pending.length,
     pendingValue: pending.reduce((sum, q) => sum + q.total, 0),
     pendingProfit: pending.reduce((sum, q) => sum + q.profit, 0),
+    paidCount: paid.length,
+    paidProfit: paid.reduce((sum, q) => sum + q.profit, 0),
     sentCount: sent.length,
     sentProfit: sent.reduce((sum, q) => sum + q.profit, 0),
   };

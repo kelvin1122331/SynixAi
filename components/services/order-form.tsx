@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, Info, Link2, Loader2, MessageCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, CreditCard, Info, Link2, Loader2, MessageCircle,
   Minus, Plus, Search, ShieldCheck, Sparkles, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -132,7 +132,7 @@ export function OrderForm({ services = [], initialService, lockedService, classN
       });
       const data = (await res.json()) as {
         ok: boolean;
-        mode?: "auto" | "manual";
+        mode?: "auto" | "manual" | "gateway";
         orderId?: string;
         reference?: string;
         needsPayment?: boolean;
@@ -140,6 +140,7 @@ export function OrderForm({ services = [], initialService, lockedService, classN
         expiresAt?: string;
         payment?: PaymentInfo;
         catalogSource?: string;
+        gatewayError?: string;
         error?: string;
         code?: string;
       };
@@ -172,6 +173,7 @@ export function OrderForm({ services = [], initialService, lockedService, classN
           expiresAt: data.expiresAt,
           payment: data.payment,
           catalogSource: data.catalogSource,
+          gatewayError: data.gatewayError,
         });
         toast({
           title: "Pesanan dibuat — menunggu pembayaran",
@@ -736,6 +738,18 @@ export interface PaymentInfo {
   qrisName?: string;
   bank?: { name: string; account: string; holder: string };
   ewallet?: { label: string; number: string; holder: string };
+  /** Info payment gateway (QRIS/VA/e-wallet otomatis) bila PAYMENT_PROVIDER aktif. */
+  gateway?: {
+    provider: string;
+    channel: string;
+    payUrl?: string | null;
+    qrString?: string | null;
+    payCode?: string | null;
+    fee?: number;
+    baseAmount?: number;
+    simulated?: boolean;
+    instructions?: string[];
+  };
 }
 
 type FormResult =
@@ -747,6 +761,8 @@ type FormResult =
       expiresAt?: string;
       payment?: PaymentInfo;
       catalogSource?: string;
+      /** Terisi bila gateway aktif tetapi gagal membuat transaksi → instruksi manual. */
+      gatewayError?: string;
     }
   | { kind: "error"; message: string; code?: string };
 
@@ -773,6 +789,37 @@ function PaymentPanel({
 }) {
   const bank = result.payment?.bank;
   const ewallet = result.payment?.ewallet;
+  const gateway = result.payment?.gateway;
+  const [paid, setPaid] = useState(false);
+
+  /* Pantau status pembayaran otomatis (gateway) tiap 5 detik. */
+  useEffect(() => {
+    if (!gateway) return;
+    let active = true;
+
+    async function check() {
+      try {
+        const res = await fetch(`/api/status?order=${encodeURIComponent(result.reference)}`, { cache: "no-store" });
+        const data = (await res.json()) as {
+          data?: Array<{ statusLabel?: string | null; paid?: boolean; error?: string }>;
+        };
+        const row = data.data?.[0];
+        if (!active || !row || row.error) return;
+        const isPending = row.statusLabel === "Menunggu Pembayaran";
+        if (row.paid || !isPending) setPaid(true);
+      } catch {
+        /* jaringan sedang putus — coba lagi pada interval berikutnya */
+      }
+    }
+
+    void check();
+    const timer = setInterval(check, 5000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [gateway, result.reference]);
+
   const waMessage = [
     `Halo admin, saya sudah melakukan pembayaran.`,
     ``,
@@ -795,8 +842,9 @@ function PaymentPanel({
           <div>
             <h2 className="text-[20px] font-extrabold text-fg">Selesaikan pembayaran</h2>
             <p className="mt-1 max-w-md text-[13.5px] leading-relaxed text-muted">
-              Pesanan Anda sudah tercatat. Setelah pembayaran dikonfirmasi, pesanan
-              otomatis dikirim ke provider dan bisa dipantau lewat kode referensi di bawah.
+              {gateway && !paid
+                ? "Bayar sekali klik lewat halaman pembayaran aman di bawah. Sistem memproses pesanan otomatis begitu pembayaran terverifikasi — kamu tidak perlu kirim bukti transfer."
+                : "Pesanan Anda sudah tercatat. Setelah pembayaran dikonfirmasi, pesanan otomatis dikirim ke provider dan bisa dipantau lewat kode referensi di bawah."}
             </p>
           </div>
         </div>
@@ -835,9 +883,105 @@ function PaymentPanel({
         </div>
       </div>
 
+      {/* Pembayaran otomatis (payment gateway) */}
+      {gateway && paid ? (
+        <div className="mt-6 flex items-start gap-3 rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.09] p-4">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500 dark:text-emerald-300" />
+          <div className="text-[12.5px] leading-relaxed">
+            <p className="font-bold text-fg">Pembayaran diterima — pesanan sedang diproses 🎉</p>
+            <p className="mt-1 text-muted">
+              Kami sudah menerima pembayaran Anda. Pesanan langsung diteruskan ke provider dan statusnya
+              bisa dipantau memakai kode referensi di atas.
+            </p>
+          </div>
+        </div>
+      ) : gateway ? (
+        <div className="mt-6 rounded-2xl border-2 border-brand-500/40 bg-brand-500/[0.07] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[13px] font-extrabold text-fg">
+                Pembayaran otomatis · {gateway.channel}
+              </p>
+              <p className="mt-1 text-[12px] text-muted">
+                Diproses oleh <span className="font-semibold text-fg-soft">{gateway.provider}</span>
+                {gateway.fee ? (
+                  <>
+                    {" "}· biaya layanan {formatRupiah(gateway.fee)} sudah termasuk di total
+                  </>
+                ) : null}
+                .
+              </p>
+            </div>
+            {gateway.payUrl ? (
+              <Button href={gateway.payUrl} variant="primary" size="md">
+                <CreditCard className="h-4 w-4" /> Bayar sekarang
+              </Button>
+            ) : null}
+          </div>
+
+          {gateway.qrString ? (
+            <div className="mt-3 rounded-xl border border-line bg-surface-2/70 p-3">
+              <p className="text-[11px] font-bold tracking-wide text-muted uppercase">QRIS (tempel di aplikasi bank/e-wallet)</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-fg-soft">{gateway.qrString}</p>
+              <div className="mt-2">
+                <CopyButton value={gateway.qrString} label="Salin kode QRIS" />
+              </div>
+            </div>
+          ) : null}
+
+          {gateway.payCode ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface-2/70 p-3">
+              <span className="text-[11px] font-bold tracking-wide text-muted uppercase">Kode bayar</span>
+              <span className="font-mono text-[14px] font-extrabold text-fg">{gateway.payCode}</span>
+              <CopyButton value={gateway.payCode} label="Salin" />
+            </div>
+          ) : null}
+
+          {gateway.instructions?.length ? (
+            <ol className="mt-3 space-y-1.5">
+              {gateway.instructions.slice(0, 4).map((step, index) => (
+                <li key={step} className="flex gap-2 text-[12px] leading-snug text-muted">
+                  <span className="font-bold text-brand-400">{index + 1}.</span> {step}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-3 text-[12px] text-muted">
+              Selesaikan pembayaran di halaman tersebut. Halaman ini otomatis diperbarui dalam beberapa
+              detik setelah pembayaran masuk.
+            </p>
+          )}
+
+          <p className="mt-3 flex items-center gap-2 text-[11.5px] text-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-400" />
+            Menunggu pembayaran… status diperbarui otomatis setiap 5 detik.
+          </p>
+
+          {gateway.simulated ? (
+            <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.09] p-2.5 text-[11.5px] leading-relaxed text-muted">
+              <span className="font-bold text-fg">Mode simulasi:</span> PAYMENT_PROVIDER masih <code className="font-mono">mock</code> —
+              tidak ada uang yang benar-benar berpindah. Ganti ke provider asli sebelum website dipakai publik.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {result.gatewayError ? (
+        <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-amber-500/35 bg-amber-500/[0.09] p-3.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500 dark:text-amber-300" />
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            <span className="font-bold text-fg">Pembayaran otomatis sedang tidak tersedia.</span> Silakan
+            bayar lewat kanal manual di bawah, lalu kirim bukti ke admin seperti biasa. Alasan teknis:{" "}
+            <span className="font-mono text-[11.5px]">{result.gatewayError}</span>
+          </p>
+        </div>
+      ) : null}
+
       {/* Kanal pembayaran */}
       <div className="mt-5">
-        <p className="text-[12px] font-bold tracking-wide text-muted uppercase">Pilih kanal pembayaran</p>
+        <p className="text-[12px] font-bold tracking-wide text-muted uppercase">
+          {gateway ? "Atau bayar manual ke kanal berikut" : "Pilih kanal pembayaran"}
+        </p>
         <div className="mt-2.5 grid gap-3 sm:grid-cols-3">
           <PayCard
             title="QRIS (semua e-wallet & m-banking)"
@@ -893,9 +1037,11 @@ function PaymentPanel({
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <Button href={siteConfig.whatsappLink(waMessage)} variant="whatsapp" size="md">
-          <MessageCircle className="h-4 w-4" /> Kirim bukti & konfirmasi
-        </Button>
+        {gateway ? null : (
+          <Button href={siteConfig.whatsappLink(waMessage)} variant="whatsapp" size="md">
+            <MessageCircle className="h-4 w-4" /> Kirim bukti & konfirmasi
+          </Button>
+        )}
         <Button href={`/cek-order?order=${result.reference}`} size="md">
           Pantau pesanan <ArrowRight className="h-4 w-4" />
         </Button>

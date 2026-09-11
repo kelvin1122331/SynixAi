@@ -60,10 +60,50 @@ export async function GET(request: Request) {
           note:
             quote.note ??
             `Pesanan "${quote.serviceName}" (${quote.quantity.toLocaleString("id-ID")} unit) akan otomatis dikirim ke provider setelah pembayaran dikonfirmasi admin.`,
+          payment: quote.payment
+            ? {
+                provider: quote.payment.provider,
+                channel: quote.payment.channel,
+                payUrl: quote.payment.payUrl ?? null,
+                expiresAt: quote.payment.expiresAt ?? null,
+              }
+            : null,
           details: [
             { label: "Layanan", value: quote.serviceName },
             { label: "Target", value: quote.target },
             { label: "Total", value: formatRupiah(quote.total) },
+            ...(quote.payment
+              ? [
+                  { label: "Metode", value: `${quote.payment.provider} · ${quote.payment.channel}` },
+                  ...(quote.payment.expiresAt
+                    ? [{ label: "Bayar sebelum", value: new Date(quote.payment.expiresAt).toLocaleString("id-ID") }]
+                    : []),
+                ]
+              : []),
+          ],
+        });
+        continue;
+      }
+
+      if (quote.status === "dibayar") {
+        results.push({
+          id: quote.reference,
+          ok: true,
+          status: "Sedang Diproses",
+          statusLabel: "Pembayaran diterima",
+          startCount: "0",
+          remains: String(quote.quantity),
+          charge: formatRupiah(quote.total),
+          currency: "IDR",
+          note:
+            quote.note ??
+            "Pembayaran sudah terverifikasi otomatis. Pesanan sedang diteruskan ke provider.",
+          paid: true,
+          paymentMethod: quote.payment ? `${quote.payment.provider} · ${quote.payment.channel}` : null,
+          details: [
+            { label: "Layanan", value: quote.serviceName },
+            { label: "Target", value: quote.target },
+            { label: "Dibayar", value: formatRupiah(quote.total) },
           ],
         });
         continue;
@@ -97,6 +137,8 @@ export async function GET(request: Request) {
             remains: panel.data.remains,
             charge: formatRupiah(quote.total),
             currency: "IDR",
+            paid: true,
+            paymentMethod: quote.payment ? `${quote.payment.provider} · ${quote.payment.channel}` : null,
             note: `Pesanan sudah diteruskan ke provider dengan ID panel #${quote.panelOrderId}.`,
             details: [
               { label: "Layanan", value: quote.serviceName },

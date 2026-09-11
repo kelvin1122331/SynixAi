@@ -1,24 +1,30 @@
 import { NextResponse } from "next/server";
-import { createPanelOrder } from "@/lib/smm";
 import { getQuote, listQuotes, updateQuote, summarizeQueue } from "@/lib/quotes";
 import { invalidateCatalog } from "@/lib/catalog";
+import { submitQuoteToPanel } from "@/lib/quote-fulfillment";
+import { getGatewayConfig } from "@/lib/payment-gateway";
+import { settleQuotePayment } from "@/lib/payment-settlement";
 
 /**
  * POST /api/admin/quotes
  * Aksi admin untuk mengelola antrean pesanan (dipakai dashboard /admin).
  *
- * Body: { token, action: "submit" | "cancel" | "sync" | "list", reference?, reason? }
+ * Body: { token, action: "submit" | "cancel" | "sync" | "list" | "simulate", reference?, reason? }
  *
- * - submit : kirim pesanan yang sudah dibayar ke panel (memotong saldo panel,
- *            sekaligus merealisasikan margin).
- * - cancel : tandai pesanan batal (mis. pembayaran tidak diterima).
- * - sync   : paksa tarik ulang katalog dari panel.
- * - list   : ringkasan antrean (untuk monitoring eksternal).
+ * - submit   : kirim pesanan ke panel (memotong saldo panel, merealisasikan margin).
+ *              Bisa dipakai untuk pesanan "menunggu_pembayaran" (konfirmasi manual)
+ *              maupun "dibayar" (pembayaran gateway sudah lunas / kirim ulang
+ *              setelah pengiriman otomatis gagal).
+ * - cancel   : tandai pesanan batal (mis. pembayaran tidak diterima).
+ * - sync     : paksa tarik ulang katalog dari panel.
+ * - list     : ringkasan antrean (untuk monitoring eksternal).
+ * - simulate : khusus PAYMENT_PROVIDER=mock → menandai pembayaran lunas untuk
+ *              menguji alur webhook → kirim otomatis ke panel.
  */
 
 interface Body {
   token?: string;
-  action?: "submit" | "cancel" | "sync" | "list";
+  action?: "submit" | "cancel" | "sync" | "list" | "simulate";
   reference?: string;
   reason?: string;
 }
@@ -50,37 +56,20 @@ export async function POST(request: Request) {
       if (!quote) {
         return NextResponse.json({ ok: false, error: "Kode referensi tidak ditemukan." }, { status: 404 });
       }
-      if (quote.status !== "menunggu_pembayaran") {
-        return NextResponse.json(
-          { ok: false, error: `Pesanan ini sudah berstatus "${quote.status}" dan tidak bisa dikirim ulang.` },
-          { status: 409 },
-        );
-      }
 
-      const result = await createPanelOrder({
-        service: quote.serviceId,
-        target: quote.target,
-        quantity: quote.quantity,
-      });
+      const result = await submitQuoteToPanel(reference);
 
       if (!result.ok) {
-        updateQuote(reference, { note: `Gagal dikirim ke panel: ${result.error}` });
-        return NextResponse.json({ ok: false, error: result.error, reference }, { status: 502 });
+        const statusCode = result.code === "NOT_FOUND" ? 404 : result.code === "WRONG_STATUS" ? 409 : 502;
+        return NextResponse.json({ ok: false, error: result.error, reference }, { status: statusCode });
       }
-
-      const updated = updateQuote(reference, {
-        status: "terkirim",
-        panelOrderId: result.data.orderId,
-        paidAt: new Date().toISOString(),
-        note: `Pembayaran diterima. Pesanan diteruskan ke panel dengan ID #${result.data.orderId}.`,
-      });
 
       return NextResponse.json({
         ok: true,
         reference,
-        panelOrderId: result.data.orderId,
-        profit: updated?.profit ?? quote.profit,
-        message: `Pesanan ${reference} berhasil dikirim ke panel (#${result.data.orderId}).`,
+        panelOrderId: result.panelOrderId,
+        profit: result.profit,
+        message: `Pesanan ${reference} berhasil dikirim ke panel (#${result.panelOrderId}).`,
       });
     }
 
@@ -122,9 +111,49 @@ export async function POST(request: Request) {
       });
     }
 
+    /* ------------------------------------------- simulasi pembayaran (mock) */
+    case "simulate": {
+      const config = getGatewayConfig();
+      if (config.provider !== "mock") {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "Aksi simulate hanya tersedia bila PAYMENT_PROVIDER=mock (mode uji). Ganti provider ke mock untuk menguji alur pembayaran otomatis.",
+          },
+          { status: 400 },
+        );
+      }
+
+      const reference = String(body.reference ?? "").trim().toUpperCase();
+      const settlement = await settleQuotePayment({
+        reference,
+        provider: "mock",
+        providerRef: `MOCK-${Date.now().toString(36).toUpperCase()}`,
+        channel: "SIMULASI",
+        simulated: true,
+      });
+
+      if (!settlement.ok) {
+        return NextResponse.json({ ok: false, error: settlement.error, reference }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        ok: true,
+        reference: settlement.reference,
+        status: settlement.status,
+        panelSubmitted: settlement.panelSubmitted,
+        panelOrderId: settlement.panelOrderId ?? null,
+        warning: settlement.error ?? null,
+        message: settlement.panelSubmitted
+          ? `Simulasi lunas — pesanan otomatis dikirim ke panel (#${settlement.panelOrderId}).`
+          : "Simulasi lunas. Pengiriman otomatis belum berhasil — lihat catatan pada pesanan.",
+      });
+    }
+
     default:
       return NextResponse.json(
-        { ok: false, error: "Aksi tidak dikenal. Gunakan: submit | cancel | sync | list." },
+        { ok: false, error: "Aksi tidak dikenal. Gunakan: submit | cancel | sync | list | simulate." },
         { status: 400 },
       );
   }

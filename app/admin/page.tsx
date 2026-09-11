@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import {
-  AlertTriangle, Ban, Banknote, CheckCircle2, Database, KeyRound, PackageCheck, Percent,
+  AlertTriangle, Ban, Banknote, CheckCircle2, CreditCard, Database, KeyRound, PackageCheck, Percent,
   RefreshCw, Send, Server, ShieldAlert, Terminal, TrendingUp, Wallet, Wifi,
 } from "lucide-react";
 import { PageHero } from "@/components/site/page-hero";
@@ -12,6 +13,7 @@ import { getCatalog, getCatalogStats, getMarginSummary } from "@/lib/catalog";
 import { fetchPanelBalance, getCredentials, getPanelBaseUrl, isIpNotAllowed, maskSecret } from "@/lib/smm";
 import { getPricingConfig, summarizePricing } from "@/lib/pricing";
 import { listQuotes, summarizeQueue } from "@/lib/quotes";
+import { getGatewayConfig } from "@/lib/payment-gateway";
 import { formatDateTime, formatRupiah } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +71,16 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
   const pendingQuotes = listQuotes("menunggu_pembayaran");
   const recentQuotes = listQuotes().slice(0, 25);
   const autoSubmit = process.env.ORDER_AUTO_SUBMIT === "1";
+  const gateway = getGatewayConfig();
+  const paidQuotes = listQuotes("dibayar");
+
+  /* URL webhook yang perlu didaftarkan di dashboard provider. */
+  const hdrs = await headers();
+  const host = hdrs.get("x-forwarded-host") ?? hdrs.get("host");
+  const proto = hdrs.get("x-forwarded-proto") ?? "https";
+  const publicBase =
+    (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "") || (host ? `${proto}://${host}` : "");
+  const webhookUrl = `${publicBase}/api/payment/webhook?provider=${gateway.provider}`;
 
   const probeBalance = probe ? await fetchPanelBalance() : null;
   const ipBlocked = probeBalance && !probeBalance.ok ? isIpNotAllowed(probeBalance.error) : false;
@@ -96,6 +108,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
           </Badge>
           <Badge tone={catalog.source === "panel" ? "success" : "warning"}>
             Katalog: {catalog.source}
+          </Badge>
+          <Badge tone={!gateway.enabled ? "neutral" : gateway.ready ? "success" : "danger"}>
+            <CreditCard className="h-3.5 w-3.5" />
+            {!gateway.enabled
+              ? "Pembayaran: manual (QRIS/transfer)"
+              : gateway.ready
+                ? `Gateway: ${gateway.provider} (${gateway.mode})`
+                : `Gateway ${gateway.provider}: kredensial kurang`}
           </Badge>
           <Badge tone="brand">
             <Percent className="h-3.5 w-3.5" /> Rata-rata margin {margin.averageMarginPercent.toFixed(0)}%
@@ -176,6 +196,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
                           {quote.reference}
                         </span>
                         <p className="mt-0.5 text-[11px] text-muted">{formatDateTime(quote.createdAt)}</p>
+                        {quote.payment ? (
+                          <p className="mt-0.5 text-[10.5px] font-semibold text-emerald-600 dark:text-emerald-300">
+                            {quote.payment.provider} · {quote.payment.channel}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="max-w-[220px] px-3 py-3">
                         <p className="truncate text-[12.5px] font-semibold text-fg" title={quote.serviceName}>
@@ -245,6 +270,62 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
             </div>
           ) : null}
         </section>
+
+        {/* ----------------------------------- Sudah dibayar, belum masuk panel */}
+        {paidQuotes.length ? (
+          <section className="rounded-3xl border border-emerald-500/25 bg-emerald-500/[0.05] p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="flex items-center gap-2 text-[16px] font-extrabold text-fg">
+                <CreditCard className="h-4.5 w-4.5 text-emerald-500 dark:text-emerald-300" /> Pembayaran diterima — siap dikirim ke panel
+              </h2>
+              <p className="text-[12px] text-muted">
+                {paidQuotes.length} pesanan · laba{" "}
+                <span className="font-bold text-emerald-500 dark:text-emerald-300">
+                  {formatRupiah(queue.paidProfit)}
+                </span>
+              </p>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {paidQuotes.map((quote) => (
+                <div
+                  key={quote.reference}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface-2/60 p-3.5"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[13px]">
+                      <span className="font-mono font-bold text-emerald-600 dark:text-emerald-300">
+                        {quote.reference}
+                      </span>
+                      <span className="text-muted"> · {quote.serviceName}</span>
+                    </p>
+                    <p className="mt-0.5 text-[11.5px] text-muted">
+                      {quote.quantity.toLocaleString("id-ID")} unit · dibayar {formatRupiah(quote.total)} · laba{" "}
+                      {formatRupiah(quote.profit)}
+                      {quote.payment ? ` · ${quote.payment.provider} · ${quote.payment.channel}` : ""}
+                      {quote.payment?.simulated ? " (simulasi)" : ""}
+                    </p>
+                    {quote.note ? (
+                      <p className="mt-1 max-w-2xl text-[11.5px] leading-snug text-rose-500 dark:text-rose-300">
+                        {quote.note}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <SubmitQuoteButton reference={quote.reference} token={provided ?? ""} />
+                    <CancelQuoteButton reference={quote.reference} token={provided ?? ""} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="mt-3 text-[11.5px] leading-relaxed text-muted">
+              Pesanan di sini sudah <span className="font-semibold text-fg">lunas</span> tetapi belum sampai ke
+              panel — umumnya karena pengiriman otomatis gagal (mis. IP server belum di-whitelist). Klik{" "}
+              <span className="font-semibold text-fg">Kirim ke panel</span> untuk mencoba lagi.
+            </p>
+          </section>
+        ) : null}
 
         {/* ------------------------------------------------------- Harga & margin */}
         <section className="grid gap-4 lg:grid-cols-[1fr_1.25fr]">
@@ -378,7 +459,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
         </section>
 
         {/* --------------------------------------------------- Status & sinkronisasi */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <StatusCard
             icon={<Server className="h-4 w-4" />}
             title="Panel API"
@@ -406,6 +487,32 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
             value={catalog.source === "panel" ? "Siap (perlu IP whitelist)" : "Belum siap"}
             ok={catalog.source === "panel"}
             note="Order & cek status butuh IP server diizinkan panel"
+          />
+          <StatusCard
+            icon={<CreditCard className="h-4 w-4" />}
+            title="Payment gateway"
+            value={
+              !gateway.enabled
+                ? "Manual (QRIS/transfer/e-wallet)"
+                : `${gateway.provider} · ${gateway.mode}`
+            }
+            ok={!gateway.enabled || gateway.ready}
+            note={
+              !gateway.enabled
+                ? "Aktifkan dengan PAYMENT_PROVIDER (mis. tripay)"
+                : gateway.ready
+                  ? gateway.autoSubmitAfterPaid
+                    ? "Otomatis kirim ke panel setelah pembayaran lunas"
+                    : "Kredensial OK · auto-kirim nonaktif (ORDER_AUTO_SUBMIT_PAID=0)"
+                  : `Kredensial ${gateway.provider} belum lengkap`
+            }
+          />
+          <StatusCard
+            icon={<Terminal className="h-4 w-4" />}
+            title="URL webhook gateway"
+            value={gateway.enabled ? (publicBase ? webhookUrl : "PUBLIC_BASE_URL belum diisi") : "(gateway nonaktif)"}
+            ok={gateway.enabled && Boolean(publicBase)}
+            note="Daftarkan URL ini di dashboard provider agar pembayaran terverifikasi otomatis"
           />
         </div>
 
@@ -473,6 +580,13 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
                 label="NEXT_PUBLIC_PAYMENT_BANK"
                 value={`${process.env.NEXT_PUBLIC_PAYMENT_BANK ?? "(kosong)"} · ${process.env.NEXT_PUBLIC_PAYMENT_BANK_ACCOUNT ? maskSecret(process.env.NEXT_PUBLIC_PAYMENT_BANK_ACCOUNT, 3) : "(kosong)"}`}
               />
+              <EnvRow label="PAYMENT_PROVIDER" value={gateway.enabled ? `${gateway.provider} (${gateway.mode})` : "manual"} />
+              <EnvRow
+                label="PAYMENT_FEE_BEARER"
+                value={`${gateway.feeBearer} · ${gateway.feePercent}% + ${formatRupiah(gateway.feeFlat)}`}
+              />
+              <EnvRow label="ORDER_AUTO_SUBMIT_PAID" value={gateway.autoSubmitAfterPaid ? "1 (kirim otomatis setelah lunas)" : "0"} />
+              <EnvRow label="PUBLIC_BASE_URL" value={publicBase || "(kosong — memakai host request)"} />
               <EnvRow label="CATALOG_REVALIDATE_SECONDS" value={String(process.env.CATALOG_REVALIDATE_SECONDS ?? 600)} />
               <EnvRow label="CATALOG_FORCE_OFFLINE" value={process.env.CATALOG_FORCE_OFFLINE === "1" ? "aktif" : "nonaktif"} />
               <EnvRow label="ADMIN_TOKEN" value={process.env.ADMIN_TOKEN ? "terpasang" : "(kosong)"} />
@@ -512,6 +626,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Search
               {
                 title: "6. Backup katalog (opsional)",
                 desc: "Jalankan `npm run sync:catalog` di VPS Anda untuk menyimpan snapshot katalog sebagai cadangan.",
+              },
+              {
+                title: "7. Pembayaran otomatis (opsional)",
+                desc: gateway.enabled
+                  ? gateway.ready
+                    ? `Gateway ${gateway.provider} (${gateway.mode}) aktif. Daftarkan URL webhook ${webhookUrl} di dashboard provider, lalu uji satu transaksi kecil sebelum dipakai publik.`
+                    : `Gateway ${gateway.provider} dipilih tetapi kredensial belum lengkap — isi PAYMENT_API_KEY / PAYMENT_PRIVATE_KEY / PAYMENT_MERCHANT_CODE.`
+                  : "Belum aktif. Isi PAYMENT_PROVIDER (tripay/midtrans/doku/duitku/xendit/ipaymu) + kredensial agar customer bisa bayar QRIS/VA otomatis dan pesanan langsung dikirim setelah pembayaran lunas. Untuk uji alur tanpa akun gateway, pakai PAYMENT_PROVIDER=mock.",
               },
             ].map((item) => (
               <div key={item.title} className="rounded-2xl border border-line bg-surface-3/40 p-4">

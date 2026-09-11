@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCatalog, getServiceById } from "@/lib/catalog";
 import { createPanelOrder, isIpNotAllowed } from "@/lib/smm";
-import { createQuote } from "@/lib/quotes";
+import { createQuote, updateQuote } from "@/lib/quotes";
+import { createGatewayCharge, getGatewayConfig, getPublicBaseUrl } from "@/lib/payment-gateway";
 import { compactNumber, formatRupiah } from "@/lib/format";
 import { paymentConfig } from "@/lib/site-config";
 
@@ -207,7 +208,118 @@ export async function POST(request: Request) {
     });
   }
 
-  /* ------------------------------- Mode 2: penawaran menunggu pembayaran */
+  /* -------------------- Mode 2: pembayaran otomatis lewat payment gateway */
+  const gateway = getGatewayConfig();
+
+  if (gateway.enabled) {
+    const quote = createQuote({
+      serviceId: service.id,
+      serviceName: service.name,
+      platform: service.platform,
+      target,
+      quantity,
+      retailPerThousand: service.priceRetail,
+      costPerThousand: service.price,
+      total,
+      profit,
+    });
+
+    const charge = await createGatewayCharge({
+      reference: quote.reference,
+      baseAmount: total,
+      description: `${service.name} · ${quantity.toLocaleString("id-ID")} unit`,
+      publicUrl: getPublicBaseUrl(request),
+    });
+
+    if (charge.ok) {
+      const data = charge.data;
+      const expiresAt = data.expiresAt ?? new Date(Date.now() + gateway.expiresMinutes * 60_000).toISOString();
+
+      updateQuote(quote.reference, {
+        total: data.amount,
+        payment: {
+          provider: data.provider,
+          providerRef: data.providerRef,
+          channel: data.channel,
+          amount: data.amount,
+          fee: data.fee,
+          baseAmount: data.baseAmount,
+          payUrl: data.payUrl,
+          qrString: data.qrString,
+          payCode: data.payCode,
+          expiresAt,
+          simulated: data.simulated,
+          instructions: data.instructions,
+        },
+        note: `Menunggu pembayaran otomatis via ${data.provider} (${data.channel}). Sistem memproses pesanan segera setelah pembayaran terverifikasi — tanpa perlu kirim bukti transfer.`,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        mode: "gateway",
+        needsPayment: true,
+        catalogSource: catalog.source,
+        reference: quote.reference,
+        service: { id: service.id, name: service.name, platform: service.platform },
+        target,
+        quantity,
+        unitPrice: Math.round((service.priceRetail / 1000) * 100) / 100,
+        total: data.amount,
+        totalFormatted: formatRupiah(data.amount),
+        expiresAt,
+        payment: {
+          qrisName: paymentConfig.qrisMerchant,
+          bank: paymentConfig.bank,
+          ewallet: paymentConfig.ewallet,
+          gateway: {
+            provider: data.provider,
+            channel: data.channel,
+            payUrl: data.payUrl ?? null,
+            qrString: data.qrString ?? null,
+            payCode: data.payCode ?? null,
+            fee: data.fee,
+            baseAmount: data.baseAmount,
+            simulated: Boolean(data.simulated),
+            instructions: data.instructions,
+          },
+        },
+        createdAt: quote.createdAt,
+      });
+    }
+
+    /* Gateway bermasalah → jangan kehilangan pesanan: tampilkan instruksi manual. */
+    const expiresAt = new Date(
+      Date.now() + (Number.isFinite(paymentConfig.quoteValidityMinutes) ? paymentConfig.quoteValidityMinutes : 120) * 60_000,
+    ).toISOString();
+
+    updateQuote(quote.reference, {
+      note: `Pembayaran otomatis (${gateway.provider}) tidak tersedia: ${charge.error} Instruksi pembayaran manual ditampilkan di bawah — silakan bayar lalu konfirmasi ke admin.`,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      mode: "manual",
+      needsPayment: true,
+      catalogSource: catalog.source,
+      gatewayError: charge.error,
+      reference: quote.reference,
+      service: { id: service.id, name: service.name, platform: service.platform },
+      target,
+      quantity,
+      unitPrice: Math.round((service.priceRetail / 1000) * 100) / 100,
+      total,
+      totalFormatted: formatRupiah(total),
+      expiresAt,
+      payment: {
+        qrisName: paymentConfig.qrisMerchant,
+        bank: paymentConfig.bank,
+        ewallet: paymentConfig.ewallet,
+      },
+      createdAt: quote.createdAt,
+    });
+  }
+
+  /* ------------------------------- Mode 3: penawaran menunggu pembayaran */
   const quote = createQuote({
     serviceId: service.id,
     serviceName: service.name,
